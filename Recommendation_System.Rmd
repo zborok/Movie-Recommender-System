@@ -1,0 +1,1284 @@
+---
+title: "AM11 Recommendation Systems - Individual Assignment"
+author: "Zervaan Borok"
+date: "5/12/2021"
+output: 
+    html_document:
+      number_sections: false
+      highlight: haddock
+      theme: spacelab
+      toc: yes
+      toc_depth: 2
+      toc_float:
+        collapsed: false
+      fontzize: 10pt
+---
+
+
+<!--begin html code: I will mark the html code in my markdown files, these are not directly related to the course material-->
+
+</style>
+<style>
+body {
+text-align: justify}
+
+</style>
+
+
+<style>
+img {
+  border-radius: 15px;
+}
+
+
+<style>
+div.grey { background-color:#808080; border-radius: 5px; padding: 20px; border-style: groove;}
+</style>
+
+<style>
+div.font {color="red"}
+</style>
+
+<style>
+div.navy1 { background-color:#686868; border-radius: 5px; padding: 20px; border-style: groove; color: #ffffff;}
+
+</style>
+
+
+<style>
+div.navy { background-color:#A2A2B6; border-radius: 5px; padding: 20px; border-style: groove; color: #ffffff;}
+
+</style>
+
+<!--end html code-->
+
+<div><img src="GroupLens_Research_logo.png" width="200px" align="right"></div>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r setup2, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<style>
+  .bottom-three {
+     margin-bottom: 3cm;
+  }
+</style>
+
+
+<p class="bottom-three">
+   
+</p>
+
+# Introduction and GroupLens Research Data
+
+<div class = "navy1">
+
+This data set (ml-latest) describes 5-star rating and free-text tagging activity from MovieLens, a movie recommendation service. It contains 27753444 ratings and 1108997 tag applications across 58098 movies. These data were created by 283228 users between January 09, 1995 and September 26, 2018. This data set was generated on September 26, 2018.
+
+Users were selected at random for inclusion. All selected users had rated at least 1 movies. No demographic information is included. Each user is represented by an id, and no other information is provided.
+
+Relevant data for this assignment are contained in the files movies.csv and ratings.csv. More details about the contents and use of all these files are available at the following url. This and other GroupLens data sets are publicly available for download at [http://grouplens.org/datasets/].
+
+</div>
+
+
+# Assignment
+
+The task here is to work with the uploaded data and build a movie recommendation system. By the end of the analysis you will be asked to propose a Recommendation System for a movie watching platform like Netflix. You will need to use your analysis and findings to justify your proposed solution.
+
+
+## Load Required Libraries and Read in Data
+
+```{r message=FALSE, warning=FALSE}
+# Load required libraries 
+
+library(recommenderlab)
+library(ggplot2)                       
+library(data.table)
+library(reshape2)
+library(dplyr)
+library(factoextra)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Read in data
+
+rm(list = ls())
+movieData <- fread(input = "C:/Users/zerva/OneDrive/Documents/R Scipts LBS/am10.mam2022/Individual_assignment_1/ml-latest/movies.csv", stringsAsFactors=FALSE)
+ratingData <- fread(input = "C:/Users/zerva/OneDrive/Documents/R Scipts LBS/am10.mam2022/Individual_assignment_1/ml-latest/ratings.csv", select = c(1:3))
+
+
+```
+
+
+
+## Step 1 - Exploratory Analysis
+
+```{r message=FALSE, warning=FALSE}
+# Dataframe reduction 
+
+set.seed(1)
+
+# Find list of unique userIds
+uniqueUsers <- unique(ratingData$userId) 
+
+# Identify location of 10,000 randomly chosen users
+locationOfSampleUsers <- which(ratingData$userId %in% sample(uniqueUsers, 1e4, replace=FALSE))
+
+# Take a subset of 10,000 users chosen in above lines
+ratingData2 <- ratingData[locationOfSampleUsers,] 
+ratingData <- ratingData2
+
+# Only select movies which we have a rating for
+movieData2 <- movieData[which(movieData$movieId %in% unique(ratingData$movieId)),]
+movieData <- movieData2
+
+# Delete files no longer necessary for analysis
+rm(movieData2, ratingData2, uniqueUsers, locationOfSampleUsers)
+
+
+```
+
+### Data Cleaning
+
+```{r message=FALSE, warning=FALSE}
+# Remove repeats in rating data
+
+repeatMovies <- names(which(table(movieData$title) > 1))
+removeRows <- integer()
+for(i in repeatMovies){
+  repeatMovieLoc <- which(movieData$title == i)
+  tempGenre <- paste(movieData$genres[repeatMovieLoc], collapse="|")
+  tempGenre <- paste(unique(unlist(strsplit(tempGenre, split = "\\|")[[1]])), collapse = "|")
+  movieData$genres[repeatMovieLoc[1]] <- tempGenre
+  removeRows <- c(removeRows, repeatMovieLoc[-1])
+  
+  repeatMovieIdLoc <- which(ratingData$movieId %in% movieData$movieId[removeRows])
+  ratingData$movieId[repeatMovieIdLoc] <- movieData$movieId[repeatMovieLoc[1]]
+}
+movieData$movieId[removeRows]
+movieData <- movieData[-removeRows,]
+movieData[movieData$title == repeatMovies[1],]
+movieData[movieData$title == repeatMovies[2],]
+rm(i, removeRows, repeatMovieIdLoc, repeatMovieLoc, repeatMovies, tempGenre)
+
+```
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+# There is a risk that the same user has rated a movie multiple times - we will take the best rating 
+
+rating_data1 <- aggregate(x = ratingData, by = list(ratingData$userId, ratingData$movieId), FUN = max)
+ratingData <- rating_data1[,-c(1,2)]
+rm(rating_data1)
+length(unique(ratingData$movieId))
+length(unique(movieData$movieId))
+
+# These movies were not rated by any user. We ought to remove these from movieData or, ignore for now
+no_ratings <- setdiff(unique(movieData$movieId), unique(ratingData$movieId)) 
+no_ratings
+
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+# Quick check of data we have loaded and cleaned
+
+str(movieData)
+summary(movieData)    
+head(movieData)
+summary(ratingData)   
+head(ratingData)
+
+```
+
+
+
+```{r message=FALSE, warning=FALSE}
+# Construct genre list
+
+list_genre <- c("Action", "Adventure", "Animation", "Children", 
+                "Comedy", "Crime","Documentary", "Drama", "Fantasy",
+                "Film-Noir", "Horror", "Musical", "Mystery","Romance",
+                "Sci-Fi", "Thriller", "War", "Western")
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Construct genre matrix
+
+ genre_mat <- data.frame(matrix(0, nrow = nrow(movieData), ncol = length(list_genre)))
+ colnames(genre_mat) <- list_genre
+ 
+ for(index in 1:nrow(genre_mat)) {
+  castRowIndex <- which(list_genre %in% unlist(strsplit(movieData$genres[index], split = "[|]")))
+   genre_mat[index, castRowIndex] <- 1
+ }
+ genre_mat <- apply(genre_mat, 2, as.integer)
+ dim(genre_mat)
+ rm(castRowIndex, index)
+ 
+ str(genre_mat)
+ View(genre_mat)
+
+ searchMatrix <- data.frame(cbind(movieData[,1:2], genre_mat[]))
+ head(searchMatrix)
+ 
+ #searchMatrix <- as(searchMatrix, "binaryRatingMatrix")
+#searchMatrix
+# rm(searchMatrix)
+
+```
+
+### Ratings Matrix
+
+```{r message=FALSE, warning=FALSE}
+# Create Ratings Matrix
+
+ratingMatrix <- dcast(ratingData, userId~movieId, value.var = "rating", na.rm=TRUE)
+
+# UserIds as rows and MovieIds as columns
+ratingMatrix <- as.matrix(ratingMatrix[,-1]) # Remove userIds
+dim(ratingMatrix) # User-item matrix
+setdiff(movieData$movieId, as.integer(colnames(ratingMatrix)))
+
+# Quick check to see if we still have same set of movies  
+ratingMatrix <- as(ratingMatrix, "realRatingMatrix")
+ratingMatrix
+
+# Convert rating matrix into a recommenderlab sparse matrix
+recommendation_model <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
+names(recommendation_model)
+
+lapply(recommendation_model, "[[", "description")
+
+recommendation_model$IBCF_realRatingMatrix$parameters
+
+```
+
+### Heatmaps of Unfiltered Data
+
+```{r message=FALSE, warning=FALSE}
+# User Similarities
+
+user_similarity <- similarity(ratingMatrix[1:100, ],
+                             method = "cosine",
+                             which = "users")
+# as.matrix(user_similarity)
+image(as.matrix(user_similarity), main = "User's Similarities")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Movie Similarities
+
+movie_similarity <- similarity(ratingMatrix[, 1:100],
+                               method = "cosine",
+                               which = "items")
+# as.matrix(movie_similarity)
+image(as.matrix(movie_similarity), main = "Movies similarity")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Movie Similarities
+
+searchMatrix3 <- na.omit(searchMatrix)
+
+rownames(searchMatrix3) <- searchMatrix3$title
+
+searchMatrix3 <- searchMatrix3[,-c(1,2)]
+
+fviz_nbclust(searchMatrix3[1:1000, ], kmeans, method = "wss")
+
+```
+
+```{r}
+km <- kmeans(searchMatrix3[1:100, ], centers = 9, nstart = 25)
+
+km
+
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Heatmap of the first 25 rows and 25 columns
+
+image(ratingMatrix[1:25, 1:25], axes = FALSE, main = "Heatmap of the first 25 rows and 25 columns")
+```
+
+### Frequency of Movie Ratings
+
+```{r message=FALSE, warning=FALSE}
+# Create a count of movie ratings
+
+rating_values <- as.vector(ratingMatrix@data)
+sort(unique(rating_values)) # extracting unique ratings
+
+Table_of_Ratings <- table(rating_values) 
+Table_of_Ratings
+
+```
+
+### Aggregation of Views by Movie
+
+```{r message=FALSE, warning=FALSE}
+# Create data frame of movies and corresponding number of views
+
+movie_views <- colCounts(ratingMatrix) # count views for each movie
+table_views <- data.frame(movie = names(movie_views),
+                          views = movie_views) # create dataframe of views
+
+table_views$movie <- as.numeric(table_views$movie)
+
+table_views1 <- merge(movieData[,1:2], table_views, by.x = 'movieId', by.y = 'movie')
+table_views2 <- table_views1[order(table_views1$views, decreasing = TRUE), ] # sort by number of views
+table_views <- table_views2
+
+head(table_views)
+rm(table_views1, table_views2)
+```
+
+### Distribution of Movie Views
+
+```{r message=FALSE, warning=FALSE}
+# Get distribution of views by movie
+
+avg <- summary(table_views$views)[4]
+
+std <- sd(table_views$views)
+
+summary(table_views$views)
+std
+
+x <- table_views$views
+
+y <- dnorm(x, mean = avg, sd = std)
+
+plot(x,y, main = "Distribution of Movie Views", col = "blue", xlab = "Number of Views", ylab = "Density of Probability")
+```
+
+### Plot of Top 10 Movies by Views
+
+```{r message=FALSE, warning=FALSE}
+# Bar Chart of total views of the top films 
+
+library(ggplot2)
+
+ggplot(table_views[1:10, ], aes(x = title, y = views)) +
+  geom_bar(stat="identity", fill = 'steelblue') +
+  geom_text(aes(label=views), vjust=-0.3, size=3.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Total Views of the Top Films")
+
+```
+
+### Filter Data
+
+```{r message=FALSE, warning=FALSE}
+# Filter ratings matrix
+
+movie_ratings <- ratingMatrix[rowCounts(ratingMatrix) > 50,
+                              colCounts(ratingMatrix) > 50] 
+movie_ratings 
+
+```
+
+### Plots, Heatmaps, and Distributions of Filtered Data
+
+```{r message=FALSE, warning=FALSE}
+# Heatmap of the top users and movies
+
+minimum_movies<- quantile(rowCounts(movie_ratings), 0.98)
+minimum_users <- quantile(colCounts(movie_ratings), 0.98)
+## This is our user-item matrix - only for common users and items ##
+image(movie_ratings[rowCounts(movie_ratings) > minimum_movies,
+                    colCounts(movie_ratings) > minimum_users],
+      main = "Heatmap of the top users and movies")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Distribution of Average Rating per User
+
+average_ratings <- rowMeans(movie_ratings)
+qplot(average_ratings, fill=I("steelblue"), col=I("red"), bins = 40) +
+  ggtitle("Distribution of the average rating per user")
+
+mean(average_ratings)
+
+tab <- table(average_ratings > 3.25, average_ratings < 4.5)[2,2]
+tab 
+
+total <- sum(table(average_ratings > 3.25, average_ratings < 4.5))
+perc <- (tab/total)*100
+perc
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Plot of normalized rating data
+
+normalized_ratings <- normalize(movie_ratings)
+sum(rowMeans(normalized_ratings) > 0.00001)
+image(normalized_ratings[rowCounts(normalized_ratings) > minimum_movies,
+                         colCounts(normalized_ratings) > minimum_users],
+      main = "Normalized Ratings of the Top Users")
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Heatmap of the top users and movies with minimum rating filter
+
+binary_minimum_movies <- quantile(rowCounts(movie_ratings), 0.95)
+binary_minimum_users <- quantile(colCounts(movie_ratings), 0.95)
+#movies_watched <- binarize(movie_ratings, minRating = 1)
+good_rated_films <- binarize(movie_ratings, minRating = 3)
+image(good_rated_films[rowCounts(movie_ratings) > binary_minimum_movies,
+                       colCounts(movie_ratings) > binary_minimum_users],
+      main = "Heatmap of the top users and movies")
+```
+
+
+### Questions for Step 1:
+
+**(i) Can you spot any issues or gaps in the data that could influence results from a Recommendation System?**
+
+There are movies that appear to have duplicate entries as well as users who have rated the same movie more than once. These observations will likely influence the results of any 
+Recommendation System.
+
+
+**(ii) In an ideal world, what additional data would you like to analyse?**
+
+In addition to the data provided, I would ideally like to have some more information about both the movies and the users. With respect to the movies, I would want to know how well each one
+performed at the box office as this is typically a good measure for evaluating the appeal of a movie to the general population. With regards to the users, I believe obtaining information pertaining to age and gender would be beneficial to this analysis. Some genres tend to be more popular among females and others among males. Additionally, different age ranges tend to gravitate
+towards different genres of movies. For example, young children will likely have very different tastes in movies when compared to middle-aged adults.
+
+
+**(iii) How does the count of views (# of ratings) vary across your list of movies?**
+
+The count of views has a range from 1.00 to 3421.00 with a median view count of 3.00 and a mean view count of 45.59. The standard deviation is 159.89 views and the distribution is heavily
+right-skewed.
+
+
+**(iv) How are the user provided ratings (of movies) distributed?**
+
+Over 81% of average user ratings fall within the range of (3.25, 4.5) and the mean rating across the entire averaged data set is 3.66.
+
+
+**(v) How similar are the 100 most frequent movies or users to each other?**
+
+In general, the users and movies are neither very similar nor very dissimilar. Some are extremely similar while others are extremely dissimilar. Within this data set, it is hard to make a 
+broad-sweeping statement about this subject. 
+
+
+
+## Step 2 - Building recommendation systems
+
+### Questions for Step 2:
+
+**(i) When do Collaborative Filtering methods work best and when do they fail?**
+
+Collaborative filtering methods work best when we have sufficient data of past interactions between users and a large basket of items and when there is enough data to establish some degree of similarity between users. Collaborative filtering methods tend to fail when new items are added to the 'basket' as it may not be clear which established rules to apply. They also struggle when introduced to a brand new user as there is no prior information on this user. Additionally, irregular users may not generate enough data to determine similarities. They will also fail if there are too many observations that are classified as 'on-the-fence'. Finally, collaborative filtering methods can be computationally intensive.
+
+
+**(ii) How do we build a recommendation system for infrequent users or new/rare movies?**
+
+We use content based methods because we have no prior information on new users or new/rare movies.
+
+
+**(iii) Which Recommendation Systems would you propose building on this data?**
+
+I would recommend building at least one memory based approach and one model based approach for this data set. To be thorough however, I would recommend building two different memory based 
+approaches and two model based approaches as some collaborative filtering methods work better than others on certain data sets. With respect to the memory-based approaches, I would suggest creating a User-Based-Collaborative-Filtering (UBCF) model and an Item-Based-Collaborative-Filtering (IBCF) model. With regard to model-based approaches, I would suggest creating a Matrix Factorisation Collaborative Filtering model as well as experimenting with a singular value decomposition (SVD) model.
+
+
+**(vi) Can you generate recommendations like 'users like you watched...' and 'movies similar to this...'?**
+
+Yes, I generated recommendations such as the ones above using all four models I created in the code below. The four models are as follows:
+
+  1. Item Based Collaborative Filtering (IBCF)
+  2. User Based Collaborative Filtering (UBCF)
+  3. Single Value Decomposition (SVD)
+  4. Model Based Collaborative Filtering using Matrix Factorisation (LIBMF)
+
+
+### Basic Item Based Collaborative Filtering (IBCF) Model
+
+```{r message=FALSE, warning=FALSE}
+# Here we split our sample into train and test. We intend to train our model on 80% of the data and test the model on the remaining 20%
+
+sampled_data<- sample(x = c(TRUE, FALSE),
+                      size = nrow(movie_ratings),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2))
+training_data <- movie_ratings[sampled_data, ]
+testing_data <- movie_ratings[!sampled_data, ]
+
+recommendation_system <- recommenderRegistry$get_entries(dataType ="realRatingMatrix")
+recommendation_system$IBCF_realRatingMatrix$parameters
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+## Basic IBCF
+
+recommen_model <- Recommender(data = training_data,
+                              method = "IBCF",
+                              parameter = list(k = 30))
+recommen_model
+class(recommen_model)
+
+```
+
+#### Model Inspection
+
+```{r message=FALSE, warning=FALSE}
+# Model Info
+
+ model_info <- getModel(recommen_model)
+ class(model_info$sim)
+ dim(model_info$sim)
+ top_items <- 20
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# This is the number of items (movies) we are using. Most popular movies
+
+sum_rows <- rowSums(model_info$sim > 0)
+table(sum_rows) 
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Distribution of the column count
+
+sum_cols <- colSums(model_info$sim > 0)
+qplot(sum_cols, fill=I("steelblue"), col=I("red"))+ ggtitle("Distribution of the column count")
+```
+
+#### Model Prediction
+
+```{r message=FALSE, warning=FALSE}
+# Predicted Recommendations
+
+top_recommendations <- 5 # the number of items to recommend to each user
+predicted_recommendations <- predict(object = recommen_model,
+                                     newdata = testing_data,
+                                     n = top_recommendations)
+predicted_recommendations
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+user1 <- predicted_recommendations@items[[12]] # recommendation for the twelfth user
+movies_user1 <- predicted_recommendations@itemLabels[user1]
+movieData$title[movieData$movieId %in% movies_user1]
+
+```
+### Similar Movies Model
+
+```{r message=FALSE, warning=FALSE}
+# Genre matrix analysis
+
+searchMatrix1 <- searchMatrix[,-2]
+
+searchMatrix1 <- as.matrix(searchMatrix1)
+
+
+searchMatrix11 <- as(searchMatrix1, "binaryRatingMatrix")
+
+
+sampled_data1<- sample(x = c(TRUE, FALSE),
+                      size = nrow(searchMatrix11),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2))
+training_data1 <- searchMatrix11[sampled_data1, ]
+testing_data1 <- searchMatrix11[!sampled_data1, ]
+
+recommendation_system1 <- recommenderRegistry$get_entries(dataType ="binaryRatingMatrix")
+recommendation_system1$IBCF_binaryRatingMatrix$parameters
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+
+recommen_model1 <- Recommender(data = training_data1,
+                              method = "IBCF",
+                              parameter = list(k = 30))
+recommen_model1
+class(recommen_model1)
+
+```
+
+
+#### Model Prediction
+
+```{r message=FALSE, warning=FALSE}
+# Predicted Recommendations
+
+top_recommendations1 <- 10 # the number of items to recommend to each user
+predicted_recommendations1 <- predict(object = recommen_model1,
+                                     newdata = testing_data1,
+                                      n = top_recommendations1)
+predicted_recommendations1
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Similar Movies
+
+user15 <- predicted_recommendations1@items[[15]] # recommendation for the fifteenth user
+#movies15 <- predicted_recommendations1@itemLabels[user15]
+movieData$title[movieData$movieId %in% user15]
+
+```
+
+
+### User Based Collaborative Filtering (UBCF)
+
+```{r message=FALSE, warning=FALSE}
+## User Based Collaborative Filtering 
+
+set.seed(1)
+e <- evaluationScheme(movie_ratings, method="split", train=0.8, given=-5)
+
+# Creation of the model - U(ser) B(ased) C(ollaborative) F(iltering)
+recommen_model_UBCF <- Recommender(movie_ratings, method = "UBCF", 
+                         parameter=list(normalize = "center", method="Cosine", nn=25))
+
+#Making predictions 
+prediction <- predict(recommen_model_UBCF, movie_ratings[1:25, ], type="ratings")
+as(prediction, "matrix")[,1:5]
+```
+
+
+#### Evaluate Model Performance with Different Numbers of Nearest Neighbors
+
+```{r message=FALSE, warning=FALSE}
+#Estimating RMSE for UBCF Using train/test split
+
+set.seed(1)
+
+# NN = 25
+RMSE.modelUBCF <- Recommender(getData(e, "train"), method = "UBCF", 
+                          parameter=list(normalize = "center", method="Cosine", nn=25))
+
+prediction_UBCF <- predict(RMSE.modelUBCF, getData(e, "known"), type="ratings")
+
+rmse_ubcf25 <- calcPredictionAccuracy(prediction_UBCF, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# NN = 30
+RMSE.modelUBCF <- Recommender(getData(e, "train"), method = "UBCF", 
+                          parameter=list(normalize = "center", method="Cosine", nn=30))
+
+prediction_UBCF <- predict(RMSE.modelUBCF, getData(e, "known"), type="ratings")
+
+rmse_ubcf30 <- calcPredictionAccuracy(prediction_UBCF, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# NN = 40
+RMSE.modelUBCF <- Recommender(getData(e, "train"), method = "UBCF", 
+                          parameter=list(normalize = "center", method="Cosine", nn=40))
+
+prediction_UBCF <- predict(RMSE.modelUBCF, getData(e, "known"), type="ratings")
+
+rmse_ubcf40 <- calcPredictionAccuracy(prediction_UBCF, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# NN = 50
+RMSE.modelUBCF <- Recommender(getData(e, "train"), method = "UBCF", 
+                          parameter=list(normalize = "center", method="Cosine", nn=50))
+
+prediction_UBCF <- predict(RMSE.modelUBCF, getData(e, "known"), type="ratings")
+
+rmse_ubcf50 <- calcPredictionAccuracy(prediction_UBCF, getData(e, "unknown"))[1]
+
+
+df_1 <- c(rmse_ubcf25, rmse_ubcf30, rmse_ubcf40, rmse_ubcf50)
+df_1 <- as.data.frame(df_1)
+
+list_1 <- c("UBCF NN = 25", "UBCF NN = 30", "UBCF NN = 40", "UBCF NN = 50")
+
+df_11 <- cbind(Model = list_1, df_1)
+names(df_11)[names(df_11) == "df_1"] <- "RMSE"
+
+df_11
+```
+
+#### Model Predictions for Selected User
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for a given user UBCF
+
+movie_ratings[410,]
+recommended.items.u410UBCF<- predict(RMSE.modelUBCF, movie_ratings[410,], n=10)
+as(recommended.items.u410UBCF, "list")[[1]]
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles and Corresponding Genres for a given user UBCF
+
+user2 <- recommended.items.u410UBCF@items[[1]] 
+movies_user2 <- recommended.items.u410UBCF@itemLabels[user2]
+titles1 <- movieData$title[movieData$movieId %in% movies_user2]
+genres1 <- movieData$genres[movieData$movieId %in% movies_user2]
+combined1 <- cbind(titles1, genres1)
+combined1
+```
+
+### Item Based Collaborative Filtering (IBCF)
+
+```{r message=FALSE, warning=FALSE}
+## Item-item collaborative Filtering
+
+#Building model
+recommen_model_IBCF <- Recommender(movie_ratings, method = "IBCF", 
+                     parameter=list(normalize = "center", method="Cosine", k=350))
+
+#Making predictions 
+prediction <- predict(recommen_model_IBCF, movie_ratings[1:25], type="ratings")
+as(prediction, "matrix")[,1:5]
+
+```
+
+#### Evaluate Model Performance with Different Values of K
+
+```{r message=FALSE, warning=FALSE}
+#Estimating RMSE for IBCF Using train/test split
+
+set.seed(1)
+# K = 150
+RMSE.modelIBCF <- Recommender(getData(e, "train"), method = "IBCF", 
+                     parameter=list(normalize = "center", method="Cosine",k=150))
+
+prediction_IBCF <- predict(RMSE.modelIBCF, getData(e, "known"), type="ratings")
+
+rmse_ibcf150 <- calcPredictionAccuracy(prediction_IBCF, getData(e, "unknown"))[1]
+
+
+
+set.seed(1)
+# K = 350
+RMSE.modelIBCF <- Recommender(getData(e, "train"), method = "IBCF", 
+                     parameter=list(normalize = "center", method="Cosine",k=350))
+
+prediction_IBCF <- predict(RMSE.modelIBCF, getData(e, "known"), type="ratings")
+
+rmse_ibcf350 <- calcPredictionAccuracy(prediction_IBCF, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# K = 550
+RMSE.modelIBCF <- Recommender(getData(e, "train"), method = "IBCF", 
+                     parameter=list(normalize = "center", method="Cosine",k=550))
+
+prediction_IBCF <- predict(RMSE.modelIBCF, getData(e, "known"), type="ratings")
+
+rmse_ibcf550 <- calcPredictionAccuracy(prediction_IBCF, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# K = 750
+RMSE.modelIBCF <- Recommender(getData(e, "train"), method = "IBCF", 
+                     parameter=list(normalize = "center", method="Cosine",k=750))
+
+prediction_IBCF <- predict(RMSE.modelIBCF, getData(e, "known"), type="ratings")
+
+rmse_ibcf750 <- calcPredictionAccuracy(prediction_IBCF, getData(e, "unknown"))[1]
+
+
+
+df_2 <- c(rmse_ibcf150, rmse_ibcf350, rmse_ibcf550, rmse_ibcf750)
+df_2 <- as.data.frame(df_2)
+
+list_2 <- c("IBCF K = 150", "IBCF K = 350", "IBCF K = 550", "IBCF K = 750")
+
+df_22 <- cbind(Model = list_2, df_2)
+names(df_22)[names(df_22) == "df_2"] <- "RMSE"
+
+df_22
+```
+
+#### Model Predictions for Selected User
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for a given user IBCF
+
+movie_ratings[410,]
+recommended.items.u410IBCF <- predict(RMSE.modelIBCF, movie_ratings[410,], n=10)
+as(recommended.items.u410IBCF, "list")[[1]]
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles for a given user IBCF
+
+user3 <- recommended.items.u410IBCF@items[[1]] 
+movies_user3 <- recommended.items.u410IBCF@itemLabels[user3]
+titles2 <- movieData$title[movieData$movieId %in% movies_user3]
+genres2 <- movieData$genres[movieData$movieId %in% movies_user3]
+combined2 <- cbind(titles2, genres2)
+combined2
+```
+
+### Single Value Decomposition (SVD)
+
+```{r message=FALSE, warning=FALSE}
+## SVD collaborative Filtering
+
+#Building model
+recommen_model_SVD_0 <- Recommender(movie_ratings, method = "SVD", 
+                     parameter=list(normalize = "center", k=25, maxit = 2000))
+
+#Making predictions 
+prediction <- predict(recommen_model_SVD_0, movie_ratings[1:25], type="ratings")
+as(prediction, "matrix")[,1:5]
+
+```
+
+#### Evaluate Model Performance with Different Values of K
+
+```{r message=FALSE, warning=FALSE}
+## Estimating RMSE for SVD collaborative Filtering Using train/test split 
+
+set.seed(1)
+# K = 25
+recommen_model_SVD <- Recommender(getData(e, "train"), method = "SVD", 
+                     parameter=list(normalize = "center", k=25, maxit = 2000))
+
+prediction_SVD <- predict(recommen_model_SVD, getData(e, "known"), type="ratings")
+
+rmse_svd25 <- calcPredictionAccuracy(prediction_SVD, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# K = 50
+recommen_model_SVD <- Recommender(getData(e, "train"), method = "SVD", 
+                     parameter=list(normalize = "center", k=50, maxit = 2000))
+
+prediction_SVD <- predict(recommen_model_SVD, getData(e, "known"), type="ratings")
+as(prediction_SVD, "matrix")[1:10,1:5]
+
+
+rmse_svd50 <- calcPredictionAccuracy(prediction_SVD, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# K = 100
+recommen_model_SVD <- Recommender(getData(e, "train"), method = "SVD", 
+                     parameter=list(normalize = "center", k=100, maxit = 2000))
+
+prediction_SVD <- predict(recommen_model_SVD, getData(e, "known"), type="ratings")
+
+rmse_svd100 <- calcPredictionAccuracy(prediction_SVD, getData(e, "unknown"))[1]
+
+
+set.seed(1)
+# K = 150
+recommen_model_SVD <- Recommender(getData(e, "train"), method = "SVD", 
+                     parameter=list(normalize = "center", k=150, maxit = 2000))
+
+prediction_SVD <- predict(recommen_model_SVD, getData(e, "known"), type="ratings")
+
+rmse_svd150 <- calcPredictionAccuracy(prediction_SVD, getData(e, "unknown"))[1]
+
+
+df_3 <- c(rmse_svd25, rmse_svd50, rmse_svd100, rmse_svd150)
+df_3 <- as.data.frame(df_3)
+
+list_3 <- c("SVD K = 25", "SVD K = 50", "SVD K = 100", "SVD K = 150")
+
+df_33 <- cbind(Model = list_3, df_3)
+names(df_33)[names(df_33) == "df_3"] <- "RMSE"
+
+df_33
+```
+
+#### Model Predictions for Selected User
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for a given user SVD
+
+movie_ratings[410,]
+recommended.items.u410SVD <- predict(recommen_model_SVD, movie_ratings[410,], n=10)
+as(recommended.items.u410SVD, "list")[[1]]
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles for a given user SVD
+
+user4 <- recommended.items.u410SVD@items[[1]] 
+movies_user4 <- recommended.items.u410SVD@itemLabels[user4]
+titles3 <- movieData$title[movieData$movieId %in% movies_user4]
+genres3 <- movieData$genres[movieData$movieId %in% movies_user4]
+combined3 <- cbind(titles3, genres3)
+combined3
+```
+
+### Model Based Collaborative Filtering using Matrix Factorisation (LIBMF)
+
+```{r message=FALSE, warning=FALSE}
+## LIBMF collaborative Filtering
+
+#Building model
+recommen_model_LIBMF_0 <- Recommender(movie_ratings, method = "LIBMF", 
+                     parameter = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+#Making predictions 
+prediction <- predict(recommen_model_LIBMF_0, movie_ratings[1:25], type="ratings")
+as(prediction, "matrix")[,1:5]
+
+```
+
+#### Evaluate Model Performance
+
+```{r matrix_factorisation_system}
+### Estimating RMSE for LIBMF collaborative Filtering Using train/test split 
+
+set.seed(2)
+# Build model
+recommen_model_LIBMF <- Recommender(data = getData(e, "train"), method = "LIBMF",
+                                    parameter = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+# Making predictions
+prediction_LIBMF <- predict(recommen_model_LIBMF, getData(e, "known"), type="ratings")
+
+
+rmse_LIBMF <- calcPredictionAccuracy(prediction_LIBMF, getData(e, "unknown"))[1]
+rmse_LIBMF
+
+
+
+```
+
+#### Model Predictions for Selected User
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for a given user LIBMF
+
+movie_ratings[410,]
+recommended.items.u410LIBMF <- predict(recommen_model_LIBMF, movie_ratings[410,], n=10)
+as(recommended.items.u410LIBMF, "list")[[1]]
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles for a given user LIBMF
+
+user5 <- recommended.items.u410LIBMF@items[[1]] 
+movies_user5 <- recommended.items.u410LIBMF@itemLabels[user5]
+titles4 <- movieData$title[movieData$movieId %in% movies_user5]
+genres4 <- movieData$genres[movieData$movieId %in% movies_user5]
+combined4 <- cbind(titles4, genres4)
+combined4
+```
+
+
+
+## Step 3 - Model Performance and Sensitivity Analysis
+
+### Create New Matrices with Different User and Movie Thresholds
+ 
+```{r message=FALSE, warning=FALSE}
+
+# Create matrices with different threshold levels to be used on chosen model
+
+movie_ratings_2 <- ratingMatrix[rowCounts(ratingMatrix)> 30, colCounts(ratingMatrix)> 30]
+
+movie_ratings_2 
+
+movie_ratings_3 <- ratingMatrix[rowCounts(ratingMatrix)> 70, colCounts(ratingMatrix)> 70]
+
+movie_ratings_3
+
+movie_ratings_4 <- ratingMatrix[rowCounts(ratingMatrix)> 100, colCounts(ratingMatrix)> 100]
+
+movie_ratings_4
+
+movie_ratings_5 <- ratingMatrix[rowCounts(ratingMatrix)> 200, colCounts(ratingMatrix)> 200]
+
+movie_ratings_5
+
+movie_ratings_6 <- ratingMatrix[rowCounts(ratingMatrix)> 300, colCounts(ratingMatrix)> 300]
+
+movie_ratings_6
+
+```
+
+#### Split Each Matrix into Train and Test sets
+
+```{r message=FALSE, warning=FALSE}
+# Split each matrix into train and test
+
+set.seed(1)
+e1 <- evaluationScheme(movie_ratings_2, method="split", train=0.8, given=-5)
+
+set.seed(1)
+e2 <- evaluationScheme(movie_ratings_3, method="split", train=0.8, given=-5)
+
+set.seed(1)
+e3 <- evaluationScheme(movie_ratings_4, method="split", train=0.8, given=-5)
+
+set.seed(1)
+e4 <- evaluationScheme(movie_ratings_5, method="split", train=0.8, given=-5)
+
+set.seed(1)
+e5 <- evaluationScheme(movie_ratings_6, method="split", train=0.8, given=-5)
+```
+
+### Evaluate Selected Model on All New Train and Test Sets
+
+```{r message=FALSE, warning=FALSE}
+# Evaluate chosen model on various dataframe subsets described above
+
+set.seed(1)
+# Threshold of 30
+RMSE.model1 <- Recommender(data = getData(e1, "train"), method = "LIBMF",
+                                    param = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+prediction_1 <- predict(RMSE.model1, getData(e1, "known"), type="ratings")
+
+rmse_model_1 <- calcPredictionAccuracy(prediction_1, getData(e1, "unknown"))[1]
+
+
+set.seed(1)
+# Threshold of 70
+RMSE.model2 <- Recommender(data = getData(e2, "train"), method = "LIBMF",
+                                    param = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+prediction_2 <- predict(RMSE.model2, getData(e2, "known"), type="ratings")
+
+rmse_model_2 <- calcPredictionAccuracy(prediction_2, getData(e2, "unknown"))[1]
+
+
+set.seed(1)
+# Threshold of 100
+RMSE.model3 <- Recommender(data = getData(e3, "train"), method = "LIBMF",
+                                    param = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+prediction_3 <- predict(RMSE.model3, getData(e3, "known"), type="ratings")
+
+rmse_model_3 <- calcPredictionAccuracy(prediction_3, getData(e3, "unknown"))[1]
+
+
+set.seed(1)
+# Threshold of 200
+RMSE.model4 <- Recommender(data = getData(e4, "train"), method = "LIBMF",
+                                    param = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+prediction_4 <- predict(RMSE.model4, getData(e4, "known"), type="ratings")
+
+rmse_model_4 <- calcPredictionAccuracy(prediction_4, getData(e4, "unknown"))[1]
+
+
+set.seed(1)
+# Threshold of 300
+RMSE.model5 <- Recommender(data = getData(e5, "train"), method = "LIBMF",
+                                    param = list(dim = 12, costp_l2 = 0.01, 
+                                                 costq_l2 = 0.01, nthread = 4))
+
+prediction_5 <- predict(RMSE.model5, getData(e5, "known"), type="ratings")
+
+rmse_model_5 <- calcPredictionAccuracy(prediction_5, getData(e5, "unknown"))[1]
+
+
+df_4 <- c(rmse_model_1, rmse_model_2, rmse_model_3, rmse_model_4, rmse_model_5)
+df_4 <- as.data.frame(df_4)
+
+list_4 <- c("Threshold of 30", "Threshold of 70", "Threshold of 100", "Threshold of 200", "Threshold of 300")
+
+df_44 <- cbind(Model = list_4, df_4)
+names(df_44)[names(df_44) == "df_4"] <- "RMSE"
+
+df_44
+
+```
+
+
+
+
+### Questions for Step 3:
+
+**(i) Can you assess performance of the above models for frequent and infrequent users/movies?**
+
+Yes, as shown above I have evaluated the model on various data sets, each with it's own filter with regards to frequent and infrequent users/movies. The results indicate that this model is
+quite robust to different thresholds. 
+
+
+**(ii) Which model and subset of data gives you the best performance?**
+
+The model that worked best was the LIBMF model which utilizes matrix factorisation to create a recommendation system. The subset of data that gives the best performance is the one which only
+contains movies that have been viewed by more than 300 users and users that have viewed more than 300 movies. 
+
+
+**(iii) In this data set, under what circumstances does the performance of a Collaborative Filtering method deteriorate?**
+
+In this data set, the performance of any Collaborative Filtering method deteriorates when we include users who have viewed very few movies and movies that have been viewed/rated by very few users.
+
+
+## Step 4 - Final proposed solution
+
+### Use Chosen Model to Make Predicted Recommendations on Two Random Users
+
+#### User 500
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for User 500
+
+movie_ratings[500,]
+recommended.items.u500LIBMF <- predict(recommen_model_LIBMF, movie_ratings[500,], n=20)
+as(recommended.items.u500LIBMF, "list")[[1]]
+
+```
+
+##### Predicted Recommendations for User 500
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles for User 500
+
+userX <- recommended.items.u500LIBMF@items[[1]] 
+movies_userX <- recommended.items.u500LIBMF@itemLabels[userX]
+titles_X <- movieData$title[movieData$movieId %in% movies_userX]
+genres_X <- movieData$genres[movieData$movieId %in% movies_userX]
+combined_X <- cbind(titles_X, genres_X)
+combined_X
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Count of genre types for recommendations for User 500
+
+df_X <- as.data.frame(table(combined_X[,2]))
+
+names(df_X)[names(df_X) == "Var1"] <- "Genre"
+
+df_X <- df_X[order(df_X$Freq, decreasing = TRUE),]
+
+df_X
+```
+
+##### Movie Genres Viewed/Rated by User 500
+```{r message=FALSE, warning=FALSE}
+# Count of genre types of movies rated/watched by User 500
+
+rated_movies <- which(colCounts(movie_ratings[500,]) == 1)
+
+titles_X1 <- movieData$title[movieData$movieId %in% rated_movies]
+genres_X1 <- movieData$genres[movieData$movieId %in% rated_movies]
+combined_X1 <- cbind(titles_X1, genres_X1)
+df_X1 <- as.data.frame(table(combined_X1[,2]))
+names(df_X1)[names(df_X1) == "Var1"] <- "Genre"
+df_X1 <- df_X1[order(df_X1$Freq, decreasing = TRUE),]
+df_X1
+```
+
+#### User 600
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie ID's for User 600
+
+movie_ratings[600,]
+recommended.items.u600LIBMF <- predict(recommen_model_LIBMF, movie_ratings[600,], n=20)
+as(recommended.items.u600LIBMF, "list")[[1]]
+
+```
+
+##### Predicted Recommendations for User 600
+```{r message=FALSE, warning=FALSE}
+# Recommended Movie Titles for User 600
+
+userY <- recommended.items.u600LIBMF@items[[1]] 
+movies_userY <- recommended.items.u600LIBMF@itemLabels[userY]
+titles_Y <- movieData$title[movieData$movieId %in% movies_userY]
+genres_Y <- movieData$genres[movieData$movieId %in% movies_userY]
+combined_Y <- cbind(titles_Y, genres_Y)
+combined_Y
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Count of genre types for recommendations for User 600
+
+df_Y <- as.data.frame(table(combined_Y[,2]))
+
+names(df_Y)[names(df_Y) == "Var1"] <- "Genre"
+
+df_Y <- df_Y[order(df_Y$Freq, decreasing = TRUE),]
+df_Y
+
+```
+
+##### Movie Genres Viewed/Rated by User 600
+```{r message=FALSE, warning=FALSE}
+# Count of genre types of movies rated/watched by User 600
+
+rated_movies_1 <- which(colCounts(movie_ratings[600,]) == 1)
+
+titles_Y1 <- movieData$title[movieData$movieId %in% rated_movies_1]
+genres_Y1 <- movieData$genres[movieData$movieId %in% rated_movies_1]
+combined_Y1 <- cbind(titles_Y1, genres_Y1)
+df_Y1 <- as.data.frame(table(combined_Y1[,2]))
+names(df_Y1)[names(df_Y1) == "Var1"] <- "Genre"
+df_Y1 <- df_Y1[order(df_Y1$Freq, decreasing = TRUE),]
+df_Y1
+
+```
+
+
+### Questions for Step 4:
+
+**(i) What strategy would you implement for a movie recommendation platform like Netflix?**
+
+I would implement a LIBMF model which utilizes matrix factorisation to create a recommendation system as this was the best performing model of the four that I created. Even when the data set 
+passed to it contained users who have viewed at least 30 movies and movies that have been viewed/rated by at least 30 users, the RMSE of the model was much lower than that of the other three (the other three models were passed a data set in which each user had viewed/rated at least 50 movies and each movie had been viewed/rated by at least 50 users).
+
+
+**(ii) Select two users randomly and describe movies that your system recommends for them. Could you elaborate on the relevance of the choices offered?**
+
+I selected two users from the movie_ratings matrix; user 500 and user 600 (which correspond to rows 500 & 600 of the movie_ratings matrix respectfully). The movies recommended to user 500 are
+predominantly of the categories drama, action, and adventure. Inspecting the list of movies that have been rated/viewed by user 500 confirms that these recommendations are relevant.
+
+The movies recommended to user 600 are predominantly of the categories drama, comedy, and romance. Inspecting the list of movies that have been rated/viewed by user 600 confirms that these recommendations are relevant.
+
+
+**(iii) What genres of movies are most relevant recommendations for these two users?**
+
+For user 500: drama, action, comedy, and adventure
+
+For user 600: drama, comedy, horror, and romance
+
+
+
+## Reference
+
+> F. Maxwell Harper and Joseph A. Konstan. 2015. The MovieLens Datasets: History and Context. ACM Transactions on Interactive Intelligent Systems (TiiS) 5, 4: 19:1–19:19. <https://doi.org/10.1145/2827872>
